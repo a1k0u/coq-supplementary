@@ -179,16 +179,32 @@ where "[| e |] st => z" := (eval e st z).
 
 Module SmokeTest.
 
-  Lemma zero_always x (s : state Z) : [| Var x [*] Nat 0 |] s => Z.zero.
-  Proof. admit. Admitted.
-  
+  Lemma zero_always x (s : state Z) (z : Z) (H: s / x => z) : [| Var x [*] Nat 0 |] s => Z.zero.
+  Proof.
+    pose proof (bs_Nat s Z.zero) as HNat.
+    pose proof (bs_Var s x z H) as HVar.
+    pose proof (bs_Mul s (Var x) (Nat 0) z 0%Z HVar HNat) as HMul.
+    rewrite (Z.mul_0_r z) in HMul.
+    apply HMul.
+  Qed.
+
   Lemma nat_always n (s : state Z) : [| Nat n |] s => n.
-  Proof. admit. Admitted.
+  Proof. 
+    apply bs_Nat. 
+  Qed.
   
   Lemma double_and_sum (s : state Z) (e : expr) (z : Z)
         (HH : [| e [*] (Nat 2) |] s => z) :
     [| e [+] e |] s => z.
-  Proof. admit. Admitted.
+  Proof.
+    inversion HH. subst.
+    inversion VALB. subst.
+    pose proof (Zplus_diag_eq_mult_2 za) as H2.
+    rewrite <- H2.
+    apply bs_Add.
+    - exact VALA.
+    - exact VALA.
+  Qed.
   
 End SmokeTest.
 
@@ -203,7 +219,14 @@ where "e1 << e2" := (subexpr e1 e2).
 
 Lemma strictness (e e' : expr) (HSub : e' << e) (st : state Z) (z : Z) (HV : [| e |] st => z) :
   exists z' : Z, [| e' |] st => z'.
-Proof. admit. Admitted.
+Proof.
+  generalize dependent z.
+  induction e.
+  - intros z' e. inversion e. subst. inversion HSub. subst. exists z'. assumption.
+  - intros z' e. inversion e. subst. inversion HSub. subst. exists z'. assumption.
+  - intros z' e. inversion e. subst.
+    all: (inversion HSub; subst; eauto).
+Qed.
 
 Reserved Notation "x ? e" (at level 0).
 
@@ -223,7 +246,16 @@ Lemma defined_expression
       (RED : [| e |] s => z)
       (ID  : id ? e) :
   exists z', s / id => z'.
-Proof. admit. Admitted.
+Proof.
+  generalize dependent z.
+  induction e.
+  - intros z' RED. inversion RED. subst. inversion ID.
+  - intros z' RED. inversion RED. subst. inversion ID. subst. exists z'. assumption.
+  - intros z' RED. inversion RED. subst. 
+    all: (inversion_clear ID; destruct H). 
+    all: try (apply IHe1 with (z:=za) in H; assumption; assumption).
+    all: try (apply IHe2 with (z:=zb) in H; assumption; assumption).
+Qed.
 
 (* If a variable in expression is undefined in some state, then the expression
    is undefined is that state as well
@@ -231,24 +263,61 @@ Proof. admit. Admitted.
 Lemma undefined_variable (e : expr) (s : state Z) (id : id)
       (ID : id ? e) (UNDEF : forall (z : Z), ~ (s / id => z)) :
   forall (z : Z), ~ ([| e |] s => z).
-Proof. admit. Admitted.
+Proof.
+  intros z H.
+  pose proof (defined_expression e s z id H ID) as H1.
+  inversion H1 as [z' H2].
+  specialize (UNDEF z').
+  contradiction.
+Qed.
 
 (* The evaluation relation is deterministic *)
 Lemma eval_deterministic (e : expr) (s : state Z) (z1 z2 : Z) 
       (E1 : [| e |] s => z1) (E2 : [| e |] s => z2) :
   z1 = z2.
-Proof. admit. Admitted.
+Proof.
+  revert E1 E2. revert z1 z2. 
+  induction e.
+  - intros. inversion E1. subst. inversion E2. subst. reflexivity.
+  - intros. inversion E1. subst. inversion E2. subst. apply (state_deterministic Z s i z1 z2).
+    + assumption.
+    + assumption.
+  - intros. all: (
+      inversion E1; 
+      subst; 
+      inversion E2; 
+      subst; 
+      pose proof (IHe1 za za0 VALA VALA0); 
+      pose proof (IHe2 zb zb0 VALB VALB0); 
+      subst;
+      try (reflexivity);
+      try (contradiction)
+    ).
+  Qed.
 
 (* Equivalence of states w.r.t. an identifier *)
 Definition equivalent_states (s1 s2 : state Z) (id : id) :=
-  forall z : Z, s1 /id => z <-> s2 / id => z.
+  forall z : Z, s1 / id => z <-> s2 / id => z.
 
 Lemma variable_relevance (e : expr) (s1 s2 : state Z) (z : Z)
       (FV : forall (id : id) (ID : id ? e),
           equivalent_states s1 s2 id)
       (EV : [| e |] s1 => z) :
   [| e |] s2 => z.
-Proof. admit. Admitted.
+Proof.
+  generalize dependent z.
+  induction e.
+  - intros. inversion EV. subst. apply bs_Nat.
+  - intros. inversion EV. subst. apply bs_Var. apply (FV i).
+    + apply v_Var.
+    + assumption.
+  - intros z EV. inversion EV. subst. 
+    all: (econstructor). 
+    all: (apply IHe1 in VALA; try(exact VALA); try (assumption)).
+    all: try (intros id HV; apply FV; apply v_Bop; left; assumption).
+    all: (apply IHe2 in VALB; try (exact VALB); try (assumption)).
+    all: try (intros id HV; apply FV; apply v_Bop; right; assumption).
+  Qed.
 
 Definition equivalent (e1 e2 : expr) : Prop :=
   forall (n : Z) (s : state Z), 
@@ -256,14 +325,32 @@ Definition equivalent (e1 e2 : expr) : Prop :=
 Notation "e1 '~~' e2" := (equivalent e1 e2) (at level 42, no associativity).
 
 Lemma eq_refl (e : expr): e ~~ e.
-Proof. admit. Admitted.
+Proof.
+  unfold equivalent. 
+  intros n s.
+  split.
+  - intro H. apply H.
+  - intro H. apply H.
+Qed.
 
 Lemma eq_symm (e1 e2 : expr) (EQ : e1 ~~ e2): e2 ~~ e1.
-Proof. admit. Admitted.
+Proof.
+  unfold equivalent in EQ.
+  intros n s.
+  split.
+  - intro H. apply EQ. apply H.
+  - intro H. apply EQ. apply H.
+Qed.
 
 Lemma eq_trans (e1 e2 e3 : expr) (EQ1 : e1 ~~ e2) (EQ2 : e2 ~~ e3):
   e1 ~~ e3.
-Proof. admit. Admitted.
+Proof.
+  unfold equivalent in *.
+  intros n s.
+  split.
+  - intro H. apply EQ2. apply EQ1. apply H.
+  - intro H. apply EQ1. apply EQ2. apply H.
+Qed.
 
 Inductive Context : Type :=
 | Hole : Context
@@ -287,7 +374,47 @@ Notation "e1 '~c~' e2" := (contextual_equivalent e1 e2)
 
 Lemma eq_eq_ceq (e1 e2 : expr) :
   e1 ~~ e2 <-> e1 ~c~ e2.
-Proof. admit. Admitted.
+Proof.
+  unfold contextual_equivalent.
+  unfold equivalent.
+  split.
+  - split.
+    + generalize dependent n. induction C.
+      * intros n H'. simpl. simpl in H'. apply H in H'. assumption.
+      * intros n H'. simpl. simpl in H'. inversion_clear H'.
+        all: (apply IHC in VALA).
+        all: (econstructor).
+        all: try (assumption).
+        all: try (apply VALA).
+        all: try (apply VALB).
+        all: try (assumption).
+      * intros n H'. simpl. simpl in H'. inversion_clear H'.
+        all: (apply IHC in VALB).
+        all: (econstructor).
+        all: try (assumption).
+        all: try (apply VALA).
+        all: try (apply VALB).
+        all: try (assumption).
+    + generalize dependent n. induction C.
+      * intros n H'. simpl. simpl in H'. apply H in H'. assumption.
+      * intros n H'. simpl. simpl in H'. inversion_clear H'.
+        all: (apply IHC in VALA).
+        all: (econstructor).
+        all: try (assumption).
+        all: try (apply VALA).
+        all: try (apply VALB).
+        all: try (assumption).
+      * intros n H'. simpl. simpl in H'. inversion_clear H'.
+        all: (apply IHC in VALB).
+        all: (econstructor).
+        all: try (assumption).
+        all: try (apply VALA).
+        all: try (apply VALB).
+        all: try (assumption).
+  - intros H n s. split.
+    + specialize (H Hole n s). simpl in H. apply H.
+    + specialize (H Hole n s). simpl in H. apply H.
+Qed.
 
 Module SmallStep.
 
