@@ -120,7 +120,7 @@ Proof.
   subst.
   apply (Nat.lt_nge n0 m0).
   - exact Hi2.
-  - exact Hi1. 
+  - exact Hi1.
 Qed.
 
 Lemma le_lt_eq_id_dec : forall id1 id2 : id, 
